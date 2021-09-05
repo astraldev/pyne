@@ -1,0 +1,17 @@
+name: pynes
+version: '1'
+summary: Python-Mines
+description: |
+  Pynes is a mine game.
+base: core18
+confinement: strict
+
+parts:
+  pynes:
+    plugin: python
+    python-version: python3
+    source: .
+  
+apps:
+  pynes:
+    command: bin/pynes

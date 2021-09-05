@@ -1,0 +1,1127 @@
+#!/usr/bin/env python3
+import gi
+from timeutility import Time
+from random import choice as rand_choice
+from time import sleep
+from threading import Thread
+import os
+import csv
+gi.require_version("Gtk", "3.0")
+from gi.repository import Gtk, Gdk, GLib, Gio
+
+MENU_XML = """
+<?xml version="1.0" encoding="UTF-8"?>
+    <interface>
+        <menu id="app-menu">
+            <section>
+                <item>
+                    <attribute name="label">Leaderboard</attribute>
+                    <attribute name="action">app.leaderboard</attribute>
+               </item>
+            </section>
+            <section>
+                <item>
+                    <attribute name="label">About</attribute>
+                    <attribute name="action">app.about</attribute>
+               </item>
+               <item>
+                    <attribute name="label">Quit</attribute>
+                    <attribute name="action">app.quit</attribute>
+               </item>
+            </section>
+        </menu>
+    </interface>
+"""
+STYLE = """
+#tile-won, #tile-playing, #tile-paused, #tile-label, #mine, #tile, #tile-flagged, #tile-flagged-u, #tile-flagged-x, #tile-on,  #tile-shade{
+    padding: 0;
+    background-image: none;
+    background: none;
+    border-width: 0;
+    border-style: none;
+    text-shadow: none;
+    color: #000000;
+}
+#tile-flagged, #tile-flagged-u, #tile-flagged-x{
+    color: #ffffff;
+    text-shadow: none;
+}
+#tile:focus, #tile-flagged:focus, #tile-flagged-u:focus, #tile-flagged-x:focus, #tile-on:focus, #mine:focus{
+    background-image: -gtk-gradient( linear, left top, right bottom, from(rgba( 0, 0, 0, 0.1 )), to(rgba( 0, 0, 0, 0.1 )));
+    text-shadow: none;
+}
+#tile:hover, #tile-flagged:hover, #tile-flagged-u:hover, #tile-flagged-x:hover, #tile-on:hover, #mine:hover{
+    background-image: -gtk-gradient( linear, left top, right bottom, from(rgba( 10, 10, 10, 0.1 )), to(rgba( 10, 10, 10, 0.1 )));
+    text-shadow: none;
+}
+#tile-shade{
+    background-image: -gtk-gradient( linear, left top, right bottom, from(rgba( 0, 0, 0, 0.2 )), to(rgba( 0, 0, 0, 0.2 )));
+    text-shadow: none;
+}
+#tile{
+    background-color: #afafaf;
+}
+#tile-flagged{
+    background-color: #7acf7a;
+}
+#tile-flagged-u{
+    background-color: #cecf7a;
+}
+#tile-flagged-x{
+    background-color: #ec9999;
+}
+#tile-failed{
+    background-color: rgba(219, 89, 89, 0.7);
+}
+#tile-won{
+    background-color: rgba(80, 214, 112, 0.5);
+}
+#tile-playing{
+    background-color: rgba( 0, 0, 0, 0 );
+}
+#tile-paused{
+    background-color: rgb( 190, 190, 190 );
+}
+#tile-label{
+    font-size: 19px;
+}
+#tile-on{
+    background-color: #9ea2eb;
+}
+#mine{
+    background-color: #df4f4f;
+}
+"""
+CONFIG_DIR = "~/.config/pynes"
+LEADERBOARD_FILE = os.path.join(os.path.expanduser(CONFIG_DIR), "leaderboard")
+LB_TEXT = "#,User,Tiles,Mines,Time\n"
+LB_MAX = 5
+
+
+def check_config():
+    if not os.path.isdir(os.path.expanduser(CONFIG_DIR)):
+        os.mkdir(os.path.expanduser(CONFIG_DIR))
+
+    if not os.path.exists(LEADERBOARD_FILE):
+        open(LEADERBOARD_FILE, "w").write(LB_TEXT)
+
+
+def setup_css_file():
+    fn = "~/.config/pynes/style.css"
+    with open(os.path.expanduser(fn), "w") as fd:
+        fd.write(STYLE)
+    return os.path.expanduser(fn)
+
+
+class GameHandler:
+    game_dimension = [0, 0, 0]
+    AnimationOver = False
+    Tiles = []
+    WinningTiles = []
+    OpenedTiles = []
+    GameOver = False
+    Menu = None
+    MainWindow = None
+    MineTiles = []
+    FlaggedTiles = []
+    CurrentTime = "00:00"
+
+    def __init__(self, *args):
+        GameHandler.game_dimension = [0, 0, 0]
+
+    def game_play(self, *args):
+        self.hide()
+        self.show()
+
+    def game_option_8x8(self, *args):
+        GameHandler.game_dimension = [8, 8, 15]
+        self.game_play()
+
+    def game_option_16x16(self, *args):
+        GameHandler.game_dimension = [16, 16, 15]
+        self.game_play()
+
+    def game_option_24x16(self, *args):
+        GameHandler.game_dimension = [24, 16, 15]
+        self.game_play()
+
+    def game_option_custom(self, *args):
+        row = int(args[1].get_value())
+        col = int(args[2].get_value())
+        mine = int(args[3].get_value())
+        GameHandler.game_dimension = [row, col, mine]
+        self.game_play()
+
+    def get_game_dimension(self, *args):
+        return GameHandler.game_dimension
+
+    def _put_mines(self, area, num):
+
+        results = []
+        i = 0
+        while i < num:
+            choosen = rand_choice(area)
+            if not choosen in results:
+                results.append(choosen)
+                i += 1
+            if i == num:
+                break
+        GameHandler.MineTiles = results
+        return results
+
+    def _arrange_scores(self, data, *args):
+        targets = {}
+        for content in data:
+            _sn, _, num, mines, time = content.split(",")
+            try:
+                mines = int(mines)
+                num = int(num)
+                if num == 0:
+                    num = 1
+                if mines == 0:
+                    mines = 1
+                time_sec = int(time.split(":")[-1])
+                time_min = int(time.split(":")[-2])
+                time_hour = int(time.split(
+                    ":")[-3]) if len(time.split(":")) > 2 else 0
+            except Exception as e:
+                print(e)
+                continue
+            time = Time(time_sec, time_min, time_hour).to_seconds()
+            res_tar = round(time / (mines * num), 8)
+            targets[str(res_tar)] = content
+        target_sorted = {}
+        #last = data[-1]
+        last_key = None
+
+        for x in targets:
+            if targets[x] == data[-1]:
+                last_key = x
+        targets_s = sorted(targets)
+        #targets_s.reverse()
+        for x in targets_s:
+            target_sorted[x] = targets[x]
+        output = []
+        content = None
+        for index, key in enumerate(target_sorted.keys(), 1):
+            out = target_sorted[key]
+            if last_key is not None and key == last_key:
+                content = index
+            out = list(out.split(","))
+            out[0] = str(index)
+            out = [str(_) for _ in out]
+            out = ",".join(out)
+            output.append(out)
+        return output, content
+
+    def _organize_config(self, *args):
+        file = list(open(LEADERBOARD_FILE, "r"))
+        rest = file[1:]
+        data = file[0]
+        out_p = []
+
+        for x in rest:
+            if x == "\n":
+                continue
+            out_p.append(x)
+
+        rest = out_p
+        del out_p
+
+        if data != LB_TEXT:
+            data = LB_TEXT
+        dats, loc = self._arrange_scores(rest)
+        for dat in dats:
+            data += dat
+        open(LEADERBOARD_FILE, "w").write(data)
+        return loc
+
+    def get_top_tile(self, location):
+        mx = len(GameHandler.Tiles)
+
+        # Top
+        if (location-GameHandler.game_dimension[0] >= 0):
+            return GameHandler.Tiles[location-GameHandler.game_dimension[0]]
+
+    def get_bottom_tile(self, location):
+        mx = len(GameHandler.Tiles)
+        # Bottom
+
+        if (location+GameHandler.game_dimension[0] < mx):
+            return GameHandler.Tiles[location+GameHandler.game_dimension[0]]
+
+    def get_right_tile(self, location):
+        mx = len(GameHandler.Tiles)
+        avoid = [GameHandler.game_dimension[0]]
+
+        for x in range(GameHandler.game_dimension[1]):
+            avoid.append(avoid[x]+GameHandler.game_dimension[0])
+
+        if ((location+1) not in avoid) and (location+1) < mx:  # Right
+            return GameHandler.Tiles[location+1]
+
+    def get_left_tile(self, location):
+        avoid = [-1]
+
+        for x in range(GameHandler.game_dimension[1]):
+            avoid.append(avoid[x]+GameHandler.game_dimension[0])
+
+        if ((location-1) not in avoid) and (location-1) >= 0:  # Left
+            return GameHandler.Tiles[location-1]
+
+    def get_top_left_tile(self, location):
+        avoid = [0]
+        avoid_right = [GameHandler.game_dimension[0]+1]
+        mx = len(GameHandler.Tiles)
+        for x in range(GameHandler.game_dimension[1]):
+            avoid.append(avoid[x]+GameHandler.game_dimension[0])
+        for x in range(GameHandler.game_dimension[1]):
+            avoid_right.append(avoid[x]+GameHandler.game_dimension[0])
+        if location in avoid_right:
+            return
+        # Top Left
+        if (location-GameHandler.game_dimension[0]-1) >= 0 and (location-GameHandler.game_dimension[0]-1) not in avoid:
+            return GameHandler.Tiles[location-GameHandler.game_dimension[0]-1]
+
+    def get_bottom_left_tile(self, location):
+        avoid = [-1]
+        avoid_right = [GameHandler.game_dimension[0]+1]
+        mx = len(GameHandler.Tiles)
+        for x in range(GameHandler.game_dimension[1]):
+            avoid.append(avoid[x]+GameHandler.game_dimension[0])
+        for x in range(GameHandler.game_dimension[1]):
+            avoid_right.append(avoid[x]+GameHandler.game_dimension[0])
+        if location in avoid_right:
+            return
+        # Bottom Left
+        if (location+GameHandler.game_dimension[0]-1) < mx and (location+GameHandler.game_dimension[0]-1) not in avoid:
+            return GameHandler.Tiles[location+GameHandler.game_dimension[0]-1]
+
+    def get_top_right_tile(self, location):
+        avoid = [GameHandler.game_dimension[0]]
+        for x in range(GameHandler.game_dimension[1]):
+            avoid.append(avoid[x]+GameHandler.game_dimension[0])
+        avoid_left = [-1]
+        for x in range(GameHandler.game_dimension[1]):
+            avoid_left.append(avoid[x]+GameHandler.game_dimension[0])
+        if location in avoid_left:
+            return
+        # Top Right
+        if (location-GameHandler.game_dimension[0]+1) >= 0 and (location-GameHandler.game_dimension[0]+1) not in avoid:
+            return GameHandler.Tiles[location-GameHandler.game_dimension[0]+1]
+
+    def get_bottom_right_tile(self, location):
+        avoid = [GameHandler.game_dimension[0]]
+        mx = len(GameHandler.Tiles)
+        for x in range(GameHandler.game_dimension[1]):
+            avoid.append(avoid[x]+GameHandler.game_dimension[0])
+        avoid_left = [-1]
+        for x in range(GameHandler.game_dimension[1]):
+            avoid_left.append(avoid[x]+GameHandler.game_dimension[0])
+        if location in avoid_left:
+            return
+        # Bottom Right
+        if location in avoid:
+            return GameHandler.Tiles[location]
+        if (location+GameHandler.game_dimension[0]+1) < mx and (location+GameHandler.game_dimension[0]+1) not in avoid:
+            return GameHandler.Tiles[location+GameHandler.game_dimension[0]+1]
+
+    def _set_up_game(self, area, m_locations):
+        for index, item in enumerate(area):
+            area[index] = 0
+
+        avoid_right = [GameHandler.game_dimension[0]]
+        for x in range(GameHandler.game_dimension[1]):
+            avoid_right.append(avoid_right[x]+GameHandler.game_dimension[0])
+
+        avoid_left = [-1]
+        for x in range(GameHandler.game_dimension[1]):
+            avoid_left.append(avoid_left[x]+GameHandler.game_dimension[0])
+
+        mx = len(area)
+
+        for location in m_locations:
+            if ((location-1) not in avoid_left) and (location-1) > 0:  # Left
+                area[location-1] += 1
+            if ((location+1) not in avoid_right) and (location+1) < mx:  # Right
+                area[location+1] += 1
+            # Top
+            if (location-GameHandler.game_dimension[0] > -1):
+                area[location-GameHandler.game_dimension[0]] += 1
+            # Bottom
+            if (location+GameHandler.game_dimension[0] < mx):
+                area[location+GameHandler.game_dimension[0]] += 1
+            # Top Right
+            if (location-GameHandler.game_dimension[0]+1) > 0 and (location-GameHandler.game_dimension[0]+1) not in avoid_right:
+                area[location-GameHandler.game_dimension[0]+1] += 1
+            # Top Left
+            if (location-GameHandler.game_dimension[0]-1) > 0 and (location-GameHandler.game_dimension[0]-1) not in avoid_left:
+                area[location-GameHandler.game_dimension[0]-1] += 1
+            # Bottom Right
+            if (location+GameHandler.game_dimension[0]+1) < mx and (location+GameHandler.game_dimension[0]+1) not in avoid_right:
+                area[location+GameHandler.game_dimension[0]+1] += 1
+            # Bottom Left
+            if (location+GameHandler.game_dimension[0]-1) < mx and (location+GameHandler.game_dimension[0]-1) not in avoid_left:
+                area[location+GameHandler.game_dimension[0]-1] += 1
+        for location in m_locations:
+            area[location] = "m"
+        for index, item in enumerate(area):
+            if area[index] == 0:
+                area[index] = ""
+            if area[index] != "m":
+                GameHandler.WinningTiles.append(index)
+
+        return area
+
+    def create_arrangement(self, *args):
+        total = GameHandler.game_dimension[0]*GameHandler.game_dimension[1]
+        total_array = [_ for _ in range(total)]
+        num_of_mines = int(
+            round(total * (GameHandler.game_dimension[2] / 100) * 1.041666667, 0))
+        mine_array = total_array
+        location_of_mines = self._put_mines(mine_array, num_of_mines)
+        total_array = self._set_up_game(total_array, location_of_mines)
+        self.tile_box.set_dimensions()
+
+        for index, tile_type in enumerate(total_array):
+            mine = (tile_type == "m")
+            # 0 = empty
+            # 1 = Number
+            # 2 = Mine
+            lab = tile_type
+
+            if tile_type == "":
+                tile_type = 0
+            elif type(tile_type) == int:
+                tile_type = 1
+            elif tile_type == "m":
+                tile_type = 2
+                lab = ""
+
+            tile = Tile(index, mine, tile_type, lab)
+            self.tile_box.add_tile(tile)
+            GameHandler.Tiles.append(tile)
+
+
+class Tile(Gtk.ToggleButton):
+    icons = [None, "flag", "question"]
+
+    def __init__(self, position, is_mine, tile_type, lab, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.icon_position = 0
+        self.connect("button-press-event", self._right_clicked)
+        self.connect("toggled", self.clicked)
+        self.connect("clicked", self.clicked)
+        self.set_size_request(24, 24)
+        self.position = position
+        self.mine = is_mine
+        self.lab = lab
+        self.type = tile_type
+        self.toggled = False
+        self.set_name("tile")
+
+    def clicked(self, *args):
+        return True
+
+    def _toogle_icon(self, *args):
+        if not self.toggled:
+            self.icon_position += 1
+            if self.icon_position == 1:
+                self.set_always_show_image(True)
+                img = Gtk.Image.new_from_icon_name(
+                    "pyne-flag", Gtk.IconSize.LARGE_TOOLBAR)
+                self.set_image(img)
+                self.set_name("tile-flagged")
+                GameHandler.FlaggedTiles.append(self)
+                # self.set_label("")
+
+            if self.icon_position == 2:
+                self.set_always_show_image(True)
+                img = Gtk.Image.new_from_icon_name(
+                    "pyne-flag", Gtk.IconSize.LARGE_TOOLBAR)
+                self.set_image(img)
+                self.set_name("tile-flagged-u")
+                # self.set_label("?")
+
+            if self.icon_position > 2:
+                self.set_always_show_image(False)
+                self.icon_position = 0
+                self.set_image(None)
+                self.set_name("tile")
+                # self.set_label("")
+                if self in GameHandler.FlaggedTiles:
+                    GameHandler.FlaggedTiles.remove(self)
+
+    def _right_clicked(self, button, event):
+        # Right click event
+        if event.type == Gdk.EventType.BUTTON_PRESS and event.button == 3:
+            self._toogle_icon(button)
+
+
+class TileBox(Gtk.Overlay, GameHandler):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.next_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.add(self.main_box)
+        #                     row | col
+        self.flow = Gtk.Grid()
+        # self.flow.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.next_box.pack_start(self.flow, True, True, 0)
+        self.main_box.pack_start(self.next_box, True, True, 0)
+        self.dimensions = self.get_game_dimension()
+
+        self.start = 0
+        self.next = 0
+
+        self.game_over_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.over_label = Gtk.Label()
+        self.over_label.set_name("tile-label")
+
+        self.game_over_box.pack_start(self.over_label, True, True, 0)
+        self.add_overlay(self.game_over_box)
+        self.set_overlay_pass_through(self.game_over_box, True)
+        self.game_over_box.set_name("tile-playing")
+
+        self.game_over = False
+
+        self.show_all()
+
+    def set_dimensions(self, *args):
+        self.dimensions = self.get_game_dimension()
+        # self.flow.set_min_children_per_line(self.dimensions[0])
+        # self.flow.set_max_children_per_line(self.dimensions[0])
+
+    def check_mine(self, tile, *event):
+        # Open surrounding tiles
+        if tile.icon_position != 0:
+            return True
+        if tile.icon_position == 0 and tile.type != 2:
+            tile.set_name("tile-on")
+        location = tile.position
+
+        if tile.toggled:
+            return True
+        else:
+            tile.toggled = True
+        tile.set_label(str(tile.lab))
+
+        if self.game_over:
+            return True
+        # Get Surrounding Tiles
+
+        t_r = self.get_right_tile(location)
+        t_l = self.get_left_tile(location)
+        t_top = self.get_top_tile(location)
+        t_top_r = self.get_bottom_right_tile(location)
+        t_top_l = self.get_top_left_tile(location)
+        t_bottom = self.get_bottom_tile(location)
+        t_bottom_r = self.get_bottom_right_tile(location)
+        t_bottom_l = self.get_bottom_left_tile(location)
+
+        # Check if tile is empty
+
+        if tile.type == 0 and not self.game_over:
+            GLib.idle_add(self._open_tiles, [t_r])
+            GLib.idle_add(self._open_tiles, [t_top_r])
+            GLib.idle_add(self._open_tiles, [t_bottom_r])
+            GLib.idle_add(self._open_tiles, [t_l])
+            GLib.idle_add(self._open_tiles, [t_top_l])
+            GLib.idle_add(self._open_tiles, [t_bottom_l])
+            GLib.idle_add(self._open_tiles, [t_top])
+            GLib.idle_add(self._open_tiles, [t_bottom])
+        if tile.type == 1:
+            tile.set_label(str(tile.lab))
+
+        GameHandler.OpenedTiles.append(location)
+        if tile.type == 2:
+            self.game_over = True
+            GameHandler.GameOver = True
+            self._open_tiles(GameHandler.Tiles, True)
+            self.game_over_box.set_name("tile-failed")
+            self.over_label.set_text("A mine exploded.")
+            self.set_overlay_pass_through(self.game_over_box, False)
+
+        opened = list(sorted(GameHandler.OpenedTiles))
+        winning = list(sorted(GameHandler.WinningTiles))
+        if (opened == winning) and not self.game_over:
+            self.game_over = True
+            GameHandler.GameOver = True
+            self._open_tiles(GameHandler.Tiles, True)
+            self.game_over_box.set_name("tile-won")
+            self.over_label.set_text("Congratulation, You passed.")
+            self.set_overlay_pass_through(self.game_over_box, False)
+            self._show_leaderboard(self._add_score_to_leaderboard())
+
+        return True
+
+    def _add_score_to_leaderboard(self, *args):
+        name = os.environ.get("USER", "Unknown")
+        specs = "{0},{1}".format(
+            len(GameHandler.Tiles), len(GameHandler.MineTiles))
+        time = GameHandler.CurrentTime
+        line = len(list(open(LEADERBOARD_FILE)))
+        fd = open(LEADERBOARD_FILE, "a")
+        fd.write(f"{line},{name},{specs},{time}\n")
+        fd.close()
+        
+        return self._organize_config()
+
+    def _show_leaderboard(self, loc, *args):
+        dialog = LeaderBoard(loc)
+        dialog._show()
+
+    def _open_tiles(self, tiles, all=False):
+        for tile in tiles:
+            if tile is None:
+                continue
+            if GameHandler.GameOver:
+                if (tile.icon_position != 0) and (not tile.mine):
+                    tile.set_name("tile-flagged-x")
+                    tile.set_always_show_image(False)
+                    tile.set_label(str(tile.lab))
+
+            if tile.icon_position != 0:
+                continue
+
+            if all and tile.type == 2:
+                tile.set_name("mine")
+                b_icon = Gtk.Image.new_from_icon_name(
+                    "pyne-bomb", Gtk.IconSize.LARGE_TOOLBAR)
+                tile.set_image(b_icon)
+                tile.set_always_show_image(True)
+                tile.set_active(True)
+            if tile.type == 0:
+                tile.set_active(True)
+            if tile.type == 1:
+                tile.set_active(True)
+
+    def add_tile(self, tile):
+        self.flow.attach(tile, self.start, self.next, 1, 1)
+        tile.set_vexpand(True)
+        tile.set_margin_right(2)
+        tile.set_margin_left(2)
+        tile.set_margin_bottom(2)
+        tile.set_margin_top(2)
+        tile.set_hexpand(True)
+        self.start += 1
+        if self.start == GameHandler.game_dimension[0]:
+            self.start = 0
+            self.next += 1
+
+        tile.connect("toggled", self.check_mine)
+        self.show_all()
+        self.set_size_request(
+            GameHandler.game_dimension[0]*24, GameHandler.game_dimension[1]*24)
+
+
+class GameOptionBox(Gtk.Box):
+    def __init__(self, tilebox, *args):
+        super().__init__(*args, spacing=10)
+        self.orientation = Gtk.Orientation.VERTICAL
+        self.tick_id = None
+        self.tilebox = tilebox
+
+        # Time Passed
+        # Tiles Opened
+        # Flagged
+
+        self.time_label = Gtk.Label()
+        self.time_label.set_markup("<b>Time Taken</b>")
+
+        self.s_time_label = Gtk.Label()
+        self.s_time = Time(second=1)
+
+        box1 = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        box1.add(self.time_label)
+        box1.add(self.s_time_label)
+
+        self.tiles_label = Gtk.Label()
+        self.tiles_label.set_markup("<b>Tiles Opened</b>")
+        self.s_tiles_label = Gtk.Label("00 | 00")
+        box2 = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        box2.add(self.tiles_label)
+        box2.add(self.s_tiles_label)
+
+        self.flagged_label = Gtk.Label()
+        self.flagged_label.set_markup("<b>Flagged</b>")
+        self.s_flagged_label = Gtk.Label("00 | 00")
+        box3 = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        box3.add(self.flagged_label)
+        box3.add(self.s_flagged_label)
+
+        box4 = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        box4.set_margin_top(5)
+        box4.add(box1)
+        box4.add(box2)
+        box4.add(box3)
+
+        # - Pause
+        # - Restart Button
+        # - Menu
+
+        button1 = Gtk.Button(label="Pause")
+        button2 = Gtk.Button(label="Restart")
+        button3 = Gtk.Button(label="Menu")
+
+        button1.set_size_request(140, 50)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        box.set_homogeneous(True)
+        box.pack_start(button1, True, True, 0)
+        box.pack_start(button2, True, True, 0)
+        box.pack_start(button3, True, True, 0)
+
+        box_main = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        box_main.pack_start(box4, True, True, 0)
+        box_main.pack_end(box, False, False, 0)
+
+        box_main.set_margin_left(5)
+        box_main.set_margin_right(10)
+        box_main.set_margin_top(10)
+        box_main.set_margin_bottom(10)
+
+        self.pack_start(box_main, True, True, 0)
+
+        self.pause_button = button1
+        self.restart_button = button2
+        self.menu_button = button3
+
+        self.pause_button.connect("clicked", self._btn_pause)
+        GameHandler.MainWindow.connect("window-state-event", self.lost_focus)
+
+        self.pause_button.set_sensitive(True)
+        self.pause = False
+        self.paused_by = ""
+
+    def lost_focus(self, *args):
+        if GameHandler.GameOver:
+            return
+        self.paused_by = "window" if not self.paused else "btn"
+        if self.paused_by == "btn" and self.pause:
+            return
+        if args[1].new_window_state & Gdk.WindowState.FOCUSED == 0:
+            self.paused(ps=True)
+        else:
+            self.paused(ps=False)
+
+    def _btn_pause(self, *args):
+        self.paused_by = "btn"
+        self.paused(not self.pause)
+
+    def paused(self, ps=False):
+        if not self.pause or ps:
+            self.tilebox.game_over_box.set_name("tile-paused")
+            self.tilebox.over_label.set_markup("<b>Game paused.</b>")
+            self.tilebox.set_overlay_pass_through(
+                self.tilebox.game_over_box, False)
+            self.pause_button.set_label("Continue")
+            self.pause = True
+
+        else:
+            self.tilebox.game_over_box.set_name("tile-playing")
+            self.tilebox.over_label.set_text("")
+            self.tilebox.set_overlay_pass_through(
+                self.tilebox.game_over_box, True)
+            self.pause_button.set_label("Pause")
+            self.pause = False
+
+    def opened_tile(self, tile, *args):
+        if GameHandler.GameOver:
+            self.pause_button.set_sensitive(False)
+            self.restart_button.set_label("Play Again")
+            return
+        opened = len(GameHandler.OpenedTiles) if len(
+            GameHandler.OpenedTiles) > 9 else "0" + str(len(GameHandler.OpenedTiles))
+        self.s_tiles_label.set_text("{0} | {1}".format(
+            opened, len(GameHandler.WinningTiles)))
+        self.s_flagged_label.set_text("{0} | {1}".format(
+            len(GameHandler.FlaggedTiles), len(GameHandler.MineTiles)))
+        return True
+
+    def _right_clicked(self, button, event):
+        # Right click event
+        if event.type == Gdk.EventType.BUTTON_PRESS and event.button == 3:
+            self.s_flagged_label.set_text("{} | {}".format(
+                len(GameHandler.FlaggedTiles), len(GameHandler.MineTiles)))
+
+    def start(self, *args):
+        self.s_time_label.set_text("00:00")
+        self.s_tiles_label.set_text(
+            "0 | {}".format(len(GameHandler.WinningTiles)))
+        self.s_flagged_label.set_text(
+            "0 | {}".format(len(GameHandler.MineTiles)))
+        for tile in GameHandler.Tiles:
+            tile.connect("toggled", self.opened_tile)
+            tile.connect("button-press-event", self._right_clicked)
+        self.tick_id = GLib.timeout_add_seconds(1, self._tick)
+
+    def _tick(self, *args):
+        if GameHandler.GameOver:
+            return False
+        if self.pause:
+            return True
+        if GameHandler.AnimationOver is False:
+            return True
+        self.s_time.tick()
+        mins = self.s_time.minute
+        secs = self.s_time.second
+        if mins < 10:
+            mins = "0" + str(mins)
+        if secs < 10:
+            secs = "0" + str(secs)
+        hour = self.s_time.hour
+        if hour < 1:
+            hour = ""
+        else:
+            hour = f"{hour}:"
+
+        mins, secs = str(mins), str(secs)
+        tm = f"{hour}{mins}:{secs}"
+        self.s_time_label.set_text(tm)
+        GameHandler.CurrentTime = tm
+
+        return True
+
+
+class GameBox(Gtk.Box, GameHandler):
+    def _setup_page(self, *args):
+        for children in self.get_children():
+            self.remove(children)
+
+        self.tile_box = TileBox()
+        self.opt = GameOptionBox(self.tile_box)
+        self.opt.restart_button.connect("clicked", self.on_restart)
+
+        self.tile_box.set_margin_left(10)
+        self.tile_box.set_margin_top(10)
+        self.tile_box.set_margin_bottom(10)
+        self.pack_start(self.tile_box, True, True, 0)
+        self.pack_start(self.opt, False, True, 0)
+
+    def __init__(self, *args):
+        super().__init__(*args, spacing=5)
+        self.set_orientation(Gtk.Orientation.HORIZONTAL)
+        self.dimension = self.get_game_dimension()
+
+    def start(self, *args):
+        GameHandler.Tiles = []
+        GameHandler.WinningTiles = []
+        GameHandler.OpenedTiles = []
+        GameHandler.GameOver = False
+        GameHandler.MineTiles = []
+        GameHandler.FlaggedTiles = []
+        GameHandler.AnimationOver = False
+        GameHandler.CurrentTime = ""
+
+        self.create_arrangement()
+        self.opt.start()
+        self.opt.menu_button.connect("clicked", GameHandler.Menu)
+        self.show_all()
+        Thread(target=self._animate).start()
+
+    def _animate(self, *args):
+        length_of_tiles = len(GameHandler.Tiles)
+
+        def _(tile, nm):
+            sleep(0.025)
+            tile.set_name(nm)
+
+        if length_of_tiles > (16*16):
+            GameHandler.AnimationOver = True
+            return
+        self.tile_box.set_overlay_pass_through(
+            self.tile_box.game_over_box, False)
+
+        for tile in GameHandler.Tiles:
+            nm = tile.get_name()
+            tile.set_name("tile-shade")
+            sleep(0.025)
+            Thread(target=_, args=[tile, nm]).start()
+        GameHandler.AnimationOver = True
+        self.tile_box.set_overlay_pass_through(
+            self.tile_box.game_over_box, True)
+
+    def on_restart(self, *args):
+        self._setup_page()
+        self.start()
+
+
+class LeaderBoard(Gtk.Dialog):
+    def _get_content(self, *args):
+        return self.reader[1:]
+
+    def _get_titles(self, *args):
+        return self.reader[0]
+
+    def fill_store(self):
+        for ind, items in enumerate(self._get_content(), 1):
+            if self.location == ind:
+                self.location = self.store.append(items)
+                continue
+            self.store.append(items)
+
+    def fill_columns(self, *args):
+        for index, text in enumerate(self._get_titles()):
+            renderer_text = Gtk.CellRendererText()
+            column_text = Gtk.TreeViewColumn(text, renderer_text, text=index)
+            self.treeview.append_column(column_text)
+        model = self.treeview.get_model()
+
+        if self.location is not None and type(self.location) is not int:
+            loc = model.get_path(self.location)
+            if loc is not None:
+                self.treeview.set_cursor(loc)
+
+    def __init__(self, loc, *args):
+        super().__init__(*args)
+        self.set_title("Leaderboard")
+        self.reader = list(csv.reader(open(LEADERBOARD_FILE)))
+        scroll = Gtk.ScrolledWindow()
+        self.location = loc
+        self.store = Gtk.ListStore(str, str, str, str, str)
+        self.fill_store()
+        self.treeview = Gtk.TreeView(model=self.store)
+        self.fill_columns()
+        scroll.add(self.treeview)
+        self.get_content_area().pack_start(scroll, True, True, 0)
+        self.set_modal(True)
+        self.set_default_size(300, 350)
+        self.set_transient_for(GameHandler.MainWindow)
+        self.set_resizable(False)
+        self.add_button("Reset", 5)
+        self.show_all()
+
+    def _show(self, *args):
+        res = self.run()
+        if res == 5:
+            open(LEADERBOARD_FILE, "w").write(LB_TEXT)
+        self.hide()
+
+
+class OptionMenu(Gtk.Stack, GameHandler):
+    def __init__(self, *args):
+        super().__init__(*args)
+
+        self.grid = Gtk.FlowBox()
+        self.grid.set_max_children_per_line(2)
+        self.grid.set_min_children_per_line(2)
+        self.grid.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.box_inner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+
+        self.box2 = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.box2_inner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        self.grid2 = Gtk.Grid()
+        self.grid2.set_column_homogeneous(True)
+        self.grid2.set_row_homogeneous(True)
+
+        button1 = Gtk.Button(label="8x8")
+        button2 = Gtk.Button(label="16x16")
+        button3 = Gtk.Button(label="24x16")
+        button6 = Gtk.Button(label="Custom")
+
+        row_label = Gtk.Label(label="Rows")
+        row_spin = Gtk.SpinButton()
+        adjustment = Gtk.Adjustment(
+            upper=32, value=24, lower=3, step_increment=1, page_increment=5)
+        row_spin.set_adjustment(adjustment)
+
+        #  Set Size of all items by setting 1
+        row_label.set_size_request(90, 30)
+
+        self.grid2.attach(row_label, 0, 0, 1, 1)
+        self.grid2.attach(row_spin, 1, 0, 1, 1)
+
+        col_label = Gtk.Label(label="Columns")
+        col_spin = Gtk.SpinButton()
+        adjustment = Gtk.Adjustment(
+            upper=22, value=16, lower=3, step_increment=1, page_increment=5)
+        col_spin.set_adjustment(adjustment)
+
+        self.grid2.attach(col_label, 0, 1, 1, 1)
+        self.grid2.attach(col_spin, 1, 1, 1, 1)
+
+        mine_label = Gtk.Label(label="Mine percentage")
+        mine_spin = Gtk.SpinButton()
+        adjustment = Gtk.Adjustment(
+            upper=90, value=15, lower=1, step_increment=1, page_increment=5)
+        mine_spin.set_adjustment(adjustment)
+        self.grid2.attach(mine_label, 0, 2, 1, 1)
+        self.grid2.attach(mine_spin, 1, 2, 1, 1)
+
+        back_btn = Gtk.Button(label="Back")
+        back_btn.connect("clicked", self._from_custom)
+
+        play_btn = Gtk.Button(label="Go")
+        play_btn.connect("clicked", self.game_option_custom,
+                         row_spin, col_spin, mine_spin)
+
+        self.grid2.attach(play_btn, 1, 3, 1, 1)
+        self.grid2.attach(back_btn, 0, 3, 1, 1)
+
+        self.grid.add(button1)
+        self.grid.add(button2)
+        self.grid.add(button3)
+        self.grid.add(button6)
+
+        button1.connect("clicked", self.game_option_8x8)
+        button2.connect("clicked", self.game_option_16x16)
+        button3.connect("clicked", self.game_option_24x16)
+        button6.connect("clicked", self._to_custom)
+
+        self.box_inner.pack_start(self.grid, True, True, 40)
+        self.box.pack_start(self.box_inner, True, True, 40)
+        self.add_named(self.box, "main")
+
+        self.box2_inner.pack_start(self.grid2, True, True, 30)
+        self.grid2.set_valign(Gtk.Align.CENTER)
+        self.grid2.set_halign(Gtk.Align.CENTER)
+        self.box2.pack_start(self.box2_inner, True, True, 30)
+        self.add_named(self.box2, "custom")
+
+    def _from_custom(self, *args):
+        self.set_visible_child(self.box)
+
+    def _to_custom(self, *args):
+        self.set_visible_child(self.box2)
+
+
+class GameStack(Gtk.Stack):
+    def __init__(self, *args, **kwargs):
+        # Order
+        # - option
+        # - game page
+
+        super().__init__(*args, **kwargs)
+        self.option = OptionMenu()
+        self.gamebox = GameBox()
+        self.add_named(self.option, "options")
+        self.add_named(self.gamebox, "gamebox")
+        GameHandler.Menu = self.on_menu
+        self.option.connect("size-allocate", self.option_resized)
+
+        self.option.connect("hide", self._option_hidden)
+        self.connect("size-allocate", self.resized)
+
+    def on_menu(self, *args):
+        self.option.show_all()
+        self.set_visible_child_name("options")
+        GameHandler.MainWindow.header_bar.set_subtitle("")
+
+    def _option_hidden(self, *args):
+        sub = "Tiles: {0}x{1}, Mines: {2}%".format(*GameHandler.game_dimension)
+        GameHandler.MainWindow.header_bar.set_subtitle(sub)
+        self.set_visible_child_name("gamebox")
+        self.gamebox._setup_page()
+        self.gamebox.start()
+
+    def option_resized(self, *args):
+        # 90% when at width is 720 or less
+        # 70% when at width is 720 or more
+        sizes = list(GameHandler.MainWindow.get_size())
+        prev = sizes
+        if sizes[0] <= 720:
+            sizes[0] = sizes[0]*0.9
+        elif sizes[0] > 720:
+            sizes[0] = sizes[0]*0.75
+
+        if sizes[1] <= 720:
+            sizes[1] = sizes[1]*0.9
+        elif sizes[1] > 720:
+            sizes[1] = sizes[1]*0.75
+
+        sizes = [int(sizes[0]), int(sizes[1])]
+        margin = [int((GameHandler.MainWindow.get_size()[0]-sizes[0])/2)-10,
+                  int((GameHandler.MainWindow.get_size()[1] - sizes[1])/2)-10]
+        self.option.set_margin_top(margin[1])
+        self.option.set_margin_bottom(margin[1])
+        self.option.set_margin_right(margin[0])
+        self.option.set_margin_left(margin[0])
+
+    def resized(self, *args):
+        size = self.get_allocated_size()[0]
+        size = [size.width, size.height]
+        if size[0] < 470 or size[1] < 370:
+            self.set_size_request(570, 470)
+
+
+class MainWindow(Gtk.ApplicationWindow):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.add(GameStack())
+        GameHandler.MainWindow = self
+        self.header_bar = Gtk.HeaderBar()
+        self.header_bar.set_title("pyne")
+        self.header_bar.set_has_subtitle(True)
+        self.header_bar.set_show_close_button(True)
+        builder = Gtk.Builder.new_from_string(MENU_XML, -1)
+        menu = builder.get_object("app-menu")
+        button = Gtk.MenuButton.new()
+        button.set_direction(Gtk.ArrowType.NONE)
+        popover = Gtk.Popover.new_from_model(button, menu)
+        button.set_popover(popover)
+        self.set_titlebar(self.header_bar)
+        self.header_bar.add(button)
+        self.set_default_size(570, 470)
+        self.poped_up = False
+
+
+class Game(Gtk.Application, GameHandler):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, application_id="org.astralco.pyne", **kwargs)
+        self.window = None
+
+    def do_startup(self, *args):
+        Gtk.Application.do_startup(self)
+        action = Gio.SimpleAction.new("about", None)
+        action.connect("activate", self.about)
+        self.add_action(action)
+        action = Gio.SimpleAction.new("quit", None)
+        action.connect("activate", self.on_quit)
+        action = Gio.SimpleAction.new("leaderboard", None)
+        action.connect("activate", self.on_leaderboard)
+        self.add_action(action)
+
+    def on_leaderboard(self, *args):
+        self._organize_config()
+        lb = LeaderBoard(1)
+        lb._show()
+
+    def about(self, *args):
+        dialog = Gtk.AboutDialog(title="Pyne", parent=self.window)
+        dialog.set_version("1.0")
+        dialog.set_name("About")
+        dialog.set_program_name("Pyne")
+        dialog.set_authors(["Ekure Nyong"])
+        dialog.set_comments("PyGtk mine game")
+        dialog.set_license_type(Gtk.License.GPL_3_0)
+        dialog.run()
+        dialog.hide()
+
+    def do_activate(self, *args):
+        if not self.window:
+            # Windows are associated with the application
+            # when the last one is closed the application shuts down
+            self.window = MainWindow(application=self)
+            self.window.connect("destroy", self.on_quit)
+            self.window.set_icon_name("pynes")
+            self.add_window(self.window)
+        self.window.present()
+        self.window.show_all()
+
+    def on_quit(self, *args):
+        os.system(f"rm {CSS}")
+        self.quit()
+
+
+if __name__ == "__main__":
+    check_config()
+    css = Gtk.CssProvider()
+    CSS = setup_css_file()
+    css.load_from_path(CSS)
+    screen = Gdk.Display.get_default_screen(Gdk.Display.get_default())
+    Gtk.StyleContext().add_provider_for_screen(screen, css, 600)
+    app = Game()
+    app.run()
