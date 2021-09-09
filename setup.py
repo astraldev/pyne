@@ -26,9 +26,8 @@ setup(
     license="GPL v3",
     keywords="mines bomb",
     python_requires=">=3",
-    platform="Linux",
-    install_requires=["time-utilility"],
-    scripts=["pynes"],
+    install_requires=["timeutilities"],
+    scripts=["scripts/pynes"],
     data_files=[
         ("share/applications", ["org.astralco.pyne.desktop"]),
         ("share/icons/hicolor/512x512/apps", icons["512"]),
