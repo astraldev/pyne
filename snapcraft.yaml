@@ -18,6 +18,6 @@ apps:
 
 parts:
   pynes:
-    source: .
+    source: https://github.com/astraldev/pyne.git
     plugin: python
     requirements: ['requirements.txt']
