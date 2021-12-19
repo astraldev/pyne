@@ -11,11 +11,10 @@ confinement: devmode # use 'strict' once you have the right plugs and slots
 apps:
   pynes:
     command: bin/pynes
-    desktop: ../org.astralco.pynes.desktop
 
 parts:
   pynes:
     source: ../
     plugin: python
     python_version: python3
-    requirements: [requirements.txt]
+    requirements: ["../requirements.txt"]
