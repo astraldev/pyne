@@ -578,7 +578,7 @@ class Tile(Gtk.ToggleButton):
                 tl.set_active(False)
                 tl.toggled = False
                 
-            else:
+            elif not tile.icon_position > 1:
                 tl.set_name("tile-on")
                 tl.set_label(str(tl.lab))
                 tl.set_active(state)
