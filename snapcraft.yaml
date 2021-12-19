@@ -20,4 +20,4 @@ parts:
   pynes:
     source: .
     plugin: python
-    requirements: requirements.txt
+    requirements: ['requirements.txt']
