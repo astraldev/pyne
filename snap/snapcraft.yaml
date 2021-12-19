@@ -16,5 +16,5 @@ parts:
   pynes:
     source: ../
     plugin: python
-    python_version: python3
+    python-version: python3
     requirements: ["../requirements.txt"]
