@@ -17,13 +17,13 @@ action_icons = ["ui/icons/scalable/action/" +
 
 setup(
     name="pynes",
-    version="1.0.0",
+    version="1.1.0",
     author="AstralDev",
     author_email="ekureedem480@gmail.com",
     description='A simple python mine game',
     long_description=str(open('README.md').read()),
     long_description_content_type="text/markdown",
-    license="GPL v3",
+    license="LGPL v3",
     keywords="mines bomb",
     python_requires=">=3",
     install_requires=["timeutilities"],

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import random
 import gi
 from timeutilities import Time
 from random import choice as rand_choice
@@ -18,6 +19,10 @@ MENU_XML = """
                     <attribute name="label">Leaderboard</attribute>
                     <attribute name="action">app.leaderboard</attribute>
                </item>
+                <item>
+                    <attribute name="label">Preferences</attribute>
+                    <attribute name="action">app.preferences</attribute>
+               </item>
             </section>
             <section>
                 <item>
@@ -32,86 +37,214 @@ MENU_XML = """
         </menu>
     </interface>
 """
+COLORS = """
+@define-color --text-color              #f9a039;
+@define-color --text-color              #000000;
+@define-color --tile-bg                 #afafaf;
+@define-color --flagged-tile            #7acf7a;
+@define-color --unsure-tile-flagged     #cecf7a;
+@define-color --game-paused             #bebebe;
+@define-color --tile-opened             #9ea2eb;
+@define-color --mine-opened             #df4f4f;
+"""
 STYLE = """
-#tile-won, #tile-playing, #tile-paused, #tile-label, #mine, #tile, #tile-flagged, #tile-flagged-u, #tile-flagged-x, #tile-on,  #tile-shade{
-    padding: 0;
-    background-image: none;
-    background: none;
-    border-width: 0;
-    border-style: none;
-    text-shadow: none;
-    color: #000000;
-}
-#tile-flagged, #tile-flagged-u, #tile-flagged-x{
-    color: #ffffff;
-    text-shadow: none;
-}
-#tile:focus, #tile-flagged:focus, #tile-flagged-u:focus, #tile-flagged-x:focus, #tile-on:focus, #mine:focus{
-    background-image: -gtk-gradient( linear, left top, right bottom, from(rgba( 0, 0, 0, 0.1 )), to(rgba( 0, 0, 0, 0.1 )));
-    text-shadow: none;
-}
-#tile:hover, #tile-flagged:hover, #tile-flagged-u:hover, #tile-flagged-x:hover, #tile-on:hover, #mine:hover{
-    background-image: -gtk-gradient( linear, left top, right bottom, from(rgba( 10, 10, 10, 0.1 )), to(rgba( 10, 10, 10, 0.1 )));
-    text-shadow: none;
-}
-#tile-shade{
-    background-image: -gtk-gradient( linear, left top, right bottom, from(rgba( 0, 0, 0, 0.2 )), to(rgba( 0, 0, 0, 0.2 )));
-    text-shadow: none;
-}
-#tile{
-    background-color: #afafaf;
-}
-#tile-flagged{
-    background-color: #7acf7a;
-}
-#tile-flagged-u{
-    background-color: #cecf7a;
-}
-#tile-flagged-x{
-    background-color: #ec9999;
-}
-#tile-failed{
-    background-color: rgba(219, 89, 89, 0.7);
-}
-#tile-won{
-    background-color: rgba(80, 214, 112, 0.5);
-}
-#tile-playing{
-    background-color: rgba( 0, 0, 0, 0 );
-}
-#tile-paused{
-    background-color: rgb( 190, 190, 190 );
-}
-#tile-label{
-    font-size: 19px;
-}
-#tile-on{
-    background-color: #9ea2eb;
-}
-#mine{
-    background-color: #df4f4f;
-}
+@import url("colors.css"); #tile-won, #tile-playing, #tile-paused, #tile-label, #mine, #tile, #tile-flagged, #tile-flagged-u, #tile-flagged-x, #tile-on, #tile-shade{ padding: 0; background-image: none; background: none; border-width: 0; border-style: none; text-shadow: none; color: @--text-color; } #tile-flagged, #tile-flagged-u, #tile-flagged-x{ color: #ffffff; text-shadow: none; } #tile:focus, #tile-flagged:focus, #tile-flagged-u:focus, #tile-flagged-x:focus, #tile-on:focus, #mine:focus{ background-image: -gtk-gradient( linear, left top, right bottom, from(rgba( 0, 0, 0, 0.1 )), to(rgba( 0, 0, 0, 0.1 ))); text-shadow: none; } #tile:hover, #tile-flagged:hover, #tile-flagged-u:hover, #tile-flagged-x:hover, #tile-on:hover, #mine:hover{ background-image: -gtk-gradient( linear, left top, right bottom, from(rgba( 10, 10, 10, 0.1 )), to(rgba( 10, 10, 10, 0.1 ))); text-shadow: none; } #tile-shade{ background-image: -gtk-gradient( linear, left top, right bottom, from(rgba( 0, 0, 0, 0.2 )), to(rgba( 0, 0, 0, 0.2 ))); text-shadow: none; } #tile{ background-color: @--tile-bg; } #tile-flagged{ background-color: @--flagged-tile; } #tile-flagged-u{ background-color: @--unsure-tile-flagged; } #tile-flagged-x{ background-color: #ec9999; } #tile-failed{ background-color: rgba(219, 89, 89, 0.702); } #tile-won{ background-color: rgba(80, 214, 112, 0.502); } #tile-playing{ background-color: rgba(0, 0, 0, 0); } #tile-paused{ background-color: @--game-paused; } #tile-label{ font-size: 19px; } #tile-on{ background-color: @--tile-opened; } #mine{ background-color: @--mine-opened; } #pref-main-box { padding: 5px; }
 """
 CONFIG_DIR = "~/.config/pynes"
 LEADERBOARD_FILE = os.path.join(os.path.expanduser(CONFIG_DIR), "leaderboard")
 LB_TEXT = "#,User,Tiles,Mines,Time\n"
 LB_MAX = 5
 
+ANIMATE = True
+AnimationDir = os.path.join(os.path.expanduser(CONFIG_DIR), "animation")
+
+
 
 def check_config():
+    global ANIMATE
     if not os.path.isdir(os.path.expanduser(CONFIG_DIR)):
         os.mkdir(os.path.expanduser(CONFIG_DIR))
 
     if not os.path.exists(LEADERBOARD_FILE):
         open(LEADERBOARD_FILE, "w").write(LB_TEXT)
+    
+    if not os.path.exists(AnimationDir):
+        open(AnimationDir, "w").write("True")
+    elif open(AnimationDir, "r").read() != "True" or open(AnimationDir, "r").read() != "False":
+        open(AnimationDir, "w").write("True")
+    else:
+        ANIMATE = open(AnimationDir).read()
+        
 
 
-def setup_css_file():
+def setup_css_file(force=False):
     fn = "~/.config/pynes/style.css"
-    with open(os.path.expanduser(fn), "w") as fd:
-        fd.write(STYLE)
-    return os.path.expanduser(fn)
+    fn2 = "~/.config/pynes/colors.css"
+    fn3 = "~/.config/pynes/colors.backup.css"
+    
+    if os.path.isfile(os.path.expanduser(fn3)) and os.path.isfile(os.path.expanduser(fn2)):
+        fn2 = fn3
+    
+    if (not (os.path.isfile(os.path.expanduser(fn2)) and os.path.isfile(os.path.expanduser(fn)))):
+        with open(os.path.expanduser(fn2), "w") as fd:
+            fd.write(COLORS)
+        with open(os.path.expanduser(fn), "w") as fd:
+            fd.write(STYLE)
+        
+    return os.path.expanduser(fn), os.path.expanduser(fn2),
 
+class PrefHandler(Gtk.Dialog):
+    def _set_up_colors(self):
+        # Parse colors.css 
+        colors = {}
+        with open(COLOR) as fd:
+            data = fd.read()
+            data = data.splitlines()[1:]
+            for line in data:
+                _, name, *spaces, color = line.replace("--", "").replace(";", "").split(" ")
+                name = name.replace("--", "").replace("-", " ").replace("bg", "background").capitalize()
+                colors[name] = color
+        
+        return colors
+            
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(title="Preferences", transient_for = parent, flags=0, *args, **kwargs)
+        self.add_buttons("Reset", 335)
+        self.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL)
+        color_box = Gtk.Box(orientation = Gtk.Orientation.VERTICAL)
+        main_box = self.get_content_area()
+        
+        colors = self._set_up_colors()
+        frame = Gtk.Frame()
+        frame.set_label("Colors")
+        
+        for key in colors:
+            label = Gtk.Label(label=key)
+            clr_button = Gtk.ColorButton()
+            rgb_color = Gdk.RGBA()
+            rgb_color.parse(colors[key])
+            clr_button.set_rgba(rgb_color)
+            
+            box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+            _box = Gtk.Box()
+            _box.add(label)
+            box.pack_start(_box, True, True, 4)
+            box.pack_end(clr_button, False, False, 4)
+            
+            clr_button.connect("color-set", self.color_changed, key)
+            
+            color_box.add(box)
+            
+        # Set up 2x3 grid for tiles
+        tile_grid = Gtk.Grid()
+        tile_1 = Tile.dummy(state=False)
+        tile_5 = Tile.dummy()
+        tile_2 = Tile.dummy(mine=True)
+        tile_3 = Tile.dummy(flag=True)
+        tile_4 = Tile.dummy(question=True)
+        tile_6 = Tile.dummy(is_active=True)
+        
+        tile_grid.attach(tile_1, 0, 0, 1, 1)
+        tile_grid.attach(tile_5, 0, 1, 1, 1)
+        tile_grid.attach(tile_2, 1, 0, 1, 1)
+        tile_grid.attach(tile_3, 1, 1, 1, 1)
+        tile_grid.attach(tile_4, 2, 0, 1, 1)
+        tile_grid.attach(tile_6, 2, 1, 1, 1)
+        
+        #pause_button = Gtk.Button(label="Pause")
+        #pause_button.connect("clicked", _pause_grid)
+        
+        self.colors = colors
+        
+        # Box for color and grid -> [ color | grid ]
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        box.pack_start(color_box, True, True, 0)
+        
+        tile_grid.set_size_request(150,150)
+        box.pack_end(tile_grid, True, True, 5)
+        
+        frame.add(box)
+        
+        # Outer box for frame and pref buttons
+        button_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        
+        # -> Should Animate?
+        button_1 = Gtk.CheckButton()
+        button_1.set_label("Enable animations")
+        button_1.connect("clicked", self._animation_pref_changed)
+        
+        _active = True  if open(AnimationDir).read() == "True" else False
+        button_1.set_active(_active)
+        
+        button_box.pack_start(button_1, True, True, 10)
+        
+        outer_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        outer_box.add(frame)
+        outer_box.add(button_box)
+        
+        main_box.pack_start(outer_box, True, True, 0)
+        main_box.set_name("pref-main-box")
+        main_box.show_all()
+    
+    def _animation_pref_changed(self, button, *args):
+        open(AnimationDir, "w").write(str(button.get_active()))
+        
+    def _parse_name(self, name:str):
+        name = "--" + name.lower().replace(" ", "-").replace("background", "bg")
+        return name
+        
+    # Changing rgba to hex 
+    # https://gist.github.com/astraldev/f8534e25f195ee959d5c5709750c327a
+    def _parse_color(self, color, *args):
+        hex_value = '#%02x%02x%02x' % ((int)(color.red*255), (int)(color.green*255), (int)(color.blue*255))
+        return hex_value
+    
+    def color_changed(self, c_button, key, *args):
+        new_colors = '\n'
+        rgba = c_button.get_rgba()
+        
+        for color_keys in self.colors.keys():
+            
+            name = self._parse_name(color_keys) if color_keys != key else self._parse_name(key)
+            color = self.colors[color_keys]     if color_keys != key else self._parse_color(rgba)
+            line = f"@define-color {name} {color};\n"
+            new_colors += line
+        
+        self.change_css_file(new_colors)
+        
+    
+    def change_css_file(self, data):
+        if not os.path.isfile(os.path.expanduser("~/.config/pynes/colors.backup.css")):
+            open(os.path.expanduser("~/.config/pynes/colors.backup.css"), "w").write(CSS)
+            
+        open(os.path.expanduser("~/.config/pynes/colors.css"), "w").write(data)
+        
+        self._set_up_colors()
+        
+        css = Gtk.CssProvider()
+        css.load_from_path(os.path.expanduser("~/.config/pynes/colors.css"))
+        screen = Gdk.Display.get_default_screen(Gdk.Display.get_default())
+        Gtk.StyleContext().add_provider_for_screen(screen, css, 600)
+    
+    def reset_all(self):
+        os.remove(os.path.expanduser("~/.config/pynes/colors.css"))
+        os.rename(os.path.expanduser("~/.config/pynes/colors.backup.css"), os.path.expanduser("~/.config/pynes/colors.css"))
+        css = Gtk.CssProvider()
+        css.load_from_path(os.path.expanduser("~/.config/pynes/colors.css"))
+        screen = Gdk.Display.get_default_screen(Gdk.Display.get_default())
+        Gtk.StyleContext().add_provider_for_screen(screen, css, 600)
+        
+        open(os.path.expanduser("~/.config/pynes/animation")).write(str(True))
+        self._set_up_colors()
+        
+    
+    def start(self, *args):
+        res = self.run()
+        if res == 335:
+            self.reset_all()
+        
+        self.destroy()
+                  
 
 class GameHandler:
     game_dimension = [0, 0, 0]
@@ -405,6 +538,56 @@ class GameHandler:
 
 class Tile(Gtk.ToggleButton):
     icons = [None, "flag", "question"]
+    
+    @staticmethod
+    def dummy(state=True ,mine=False, flag=False, question=False, is_active=False):
+        tl = Tile(0, mine, (2 if mine == True else 1), random.randint(0, 4))
+        tl.dummy = True
+        tl.active_dummy = is_active
+        tl.set_size_request(32, 32)
+        tl.set_vexpand(True)
+        tl.set_margin_end(2)
+        tl.set_margin_start(2)
+        tl.set_margin_bottom(2)
+        tl.set_margin_top(2)
+        tl.set_hexpand(True)
+        if mine:
+            tl.set_name("mine")
+            b_icon = Gtk.Image.new_from_icon_name(
+                "pyne-bomb", Gtk.IconSize.LARGE_TOOLBAR)
+            tl.set_image(b_icon)
+            tl.set_always_show_image(True)
+            
+        if flag:
+            tl._toogle_icon()
+            
+        if question:
+            tl._toogle_icon()
+            tl._toogle_icon()
+            
+        if state and not (question or flag or mine or is_active):
+            tl.set_name("tile-on")
+            tl.set_label(str(tl.lab))
+            tl.set_active(state)
+            tl.toggled = True
+        
+        def _toggle(tile:Tile, *args):
+            if tile.toggled and not tile.icon_position > 1:
+                tl.set_name("tile")
+                tl.set_label("")
+                tl.set_active(False)
+                tl.toggled = False
+                
+            else:
+                tl.set_name("tile-on")
+                tl.set_label(str(tl.lab))
+                tl.set_active(state)
+                tl.toggled = True
+        
+        if is_active:
+            tl.connect("clicked", _toggle)
+        
+        return tl
 
     def __init__(self, position, is_mine, tile_type, lab, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -414,10 +597,15 @@ class Tile(Gtk.ToggleButton):
         self.connect("clicked", self.clicked)
         self.set_size_request(24, 24)
         self.position = position
+        self.active_dummy = False
         self.mine = is_mine
         self.lab = lab
+        # Types
+        # 1 - plain
+        # 2 - mine
         self.type = tile_type
         self.toggled = False
+        self.dummy = False
         self.set_name("tile")
 
     def clicked(self, *args):
@@ -454,7 +642,7 @@ class Tile(Gtk.ToggleButton):
 
     def _right_clicked(self, button, event):
         # Right click event
-        if event.type == Gdk.EventType.BUTTON_PRESS and event.button == 3:
+        if event.type == Gdk.EventType.BUTTON_PRESS and event.button == 3 and ((not self.dummy) or self.active_dummy ):
             self._toogle_icon(button)
 
 
@@ -822,6 +1010,7 @@ class GameBox(Gtk.Box, GameHandler):
         Thread(target=self._animate).start()
 
     def _animate(self, *args):
+        if not ANIMATE: return
         length_of_tiles = len(GameHandler.Tiles)
 
         def _(tile, nm):
@@ -1082,7 +1271,13 @@ class Game(Gtk.Application, GameHandler):
         action.connect("activate", self.on_quit)
         action = Gio.SimpleAction.new("leaderboard", None)
         action.connect("activate", self.on_leaderboard)
+        action = Gio.SimpleAction.new("preferences", None)
+        action.connect("activate", self.on_pref)
         self.add_action(action)
+    
+    def on_pref(self, *args):
+        pref = PrefHandler(self.window)
+        pref.start()
 
     def on_leaderboard(self, *args):
         self._organize_config()
@@ -1119,7 +1314,7 @@ class Game(Gtk.Application, GameHandler):
 if __name__ == "__main__":
     check_config()
     css = Gtk.CssProvider()
-    CSS = setup_css_file()
+    CSS, COLOR = setup_css_file()
     css.load_from_path(CSS)
     screen = Gdk.Display.get_default_screen(Gdk.Display.get_default())
     Gtk.StyleContext().add_provider_for_screen(screen, css, 600)
